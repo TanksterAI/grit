@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.pdb
+.env
+.env.*
+!.env.example
+# Never commit a secret store or a decision log.
+store.json
+secrets.json
+audit.jsonl
