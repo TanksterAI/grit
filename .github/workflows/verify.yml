@@ -1,0 +1,68 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: rustup component add clippy rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      # A panic path in production code is a crash written down in advance.
+      # Test modules are exempt; production code is not.
+      - name: Forbid panics outside tests
+        run: |
+          if grep -rnE '\.unwrap\(\)|\.expect\(|panic!|todo!|unimplemented!' src/ \
+             | grep -v 'unwrap_or' \
+             | awk -F: '{print $1" "$2}' \
+             | while read -r file line; do
+                 if ! awk -v n="$line" 'NR<=n && /#\[cfg\(test\)\]/ {found=1} END {exit !found}' "$file"; then
+                   echo "PANIC PATH: $file:$line"
+                 fi
+               done | grep .; then
+            echo "::error::panic paths found in production code"
+            exit 1
+          fi
+          echo "no panic paths in production code"
+
+      # This crate must never claim to be a sandbox. It is policy isolation:
+      # it checks arguments, not syscalls. If the word creeps into the docs
+      # without its disclaimer, the component starts getting trusted with
+      # things it cannot do.
+      - name: Guard the sandbox claim
+        run: |
+          if grep -rniE '\bis a sandbox\b|\bsandboxes\b|\bfully sandboxed\b' README.md src/ ; then
+            echo "::error::Grit must not be described as a sandbox"
+            exit 1
+          fi
+          echo "no unqualified sandbox claim"
+
+      - name: Build release
+        run: cargo build --release
