@@ -1,0 +1,24 @@
+# Free scanners that work on private repos: osv-scanner, gitleaks, cargo-audit.
+# CodeQL is deliberately absent — it needs GitHub Code Security on private repos.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: TanksterAI/.github/.github/workflows/security.yml@v1
+    with:
+      ecosystem: rust
