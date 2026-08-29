@@ -1,0 +1,33 @@
+name: agent-pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-pipeline-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["opened","synchronize","ready_for_review","reopened"]'), github.event.action)
+    uses: TanksterAI/.github/.github/workflows/claude-review.yml@76fa43c1b7f4a80801672460299434eebf7449e1
+    secrets:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  address-feedback:
+    if: github.event_name == 'pull_request_review' || github.event_name == 'issue_comment'
+    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@76fa43c1b7f4a80801672460299434eebf7449e1
+    secrets:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  auto-merge-gate:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["opened","reopened","ready_for_review","labeled","unlabeled"]'), github.event.action)
+    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@76fa43c1b7f4a80801672460299434eebf7449e1
