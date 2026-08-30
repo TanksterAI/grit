@@ -18,16 +18,18 @@ permissions:
 jobs:
   review:
     if: github.event_name == 'pull_request' && contains(fromJSON('["opened","synchronize","ready_for_review","reopened"]'), github.event.action)
-    uses: TanksterAI/.github/.github/workflows/claude-review.yml@76fa43c1b7f4a80801672460299434eebf7449e1
+    uses: TanksterAI/.github/.github/workflows/claude-review.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   address-feedback:
     if: github.event_name == 'pull_request_review' || github.event_name == 'issue_comment'
-    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@76fa43c1b7f4a80801672460299434eebf7449e1
+    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   auto-merge-gate:
     if: github.event_name == 'pull_request' && contains(fromJSON('["opened","reopened","ready_for_review","labeled","unlabeled"]'), github.event.action)
-    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@76fa43c1b7f4a80801672460299434eebf7449e1
+    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
