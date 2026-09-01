@@ -5,6 +5,28 @@
 # Tankster AI project for the full record. claude-address-feedback.yml is
 # unaffected: it already reads and resolves CodeRabbit's review comments the
 # same way it read Claude's.
+#
+# PERMISSIONS -- read this before editing. It is why every run of this file
+# failed at startup, in every repository that had it, from the day it was
+# added until 2026-09-01.
+#
+# Permissions are granted per job, not once at the top. A top-level
+# `permissions:` block is a ceiling and it is not additive -- naming one scope
+# sets every scope you did not name to `none`. A called workflow may never
+# exceed its caller's ceiling, and GitHub enforces that when it *creates* the
+# run, not when it executes one: the result is `startup_failure` with zero jobs
+# and no logs to read, which looks like infrastructure flakiness and is a
+# config error. This file carried `contents: read` alone for its whole life
+# while the workflows it calls declare `pull-requests: write` and four others,
+# so the pipeline never started once. Every PR still went green throughout,
+# because CodeRabbit is a GitHub App rather than a workflow -- the failure sat
+# behind a passing check.
+#
+# Keep each job's grant equal to what the workflow it calls actually declares,
+# and no wider. The workflow-level default stays empty: a job added later gets
+# nothing until someone states what it needs.
+#
+# AUTO-MERGE IS OFF, AND THAT IS DELIBERATE -- see the job below.
 name: agent-pipeline
 
 on:
@@ -19,17 +41,72 @@ concurrency:
   group: agent-pipeline-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
+# Deny by default. Each job below grants only what its callee declares.
+permissions: {}
 
 jobs:
   address-feedback:
     if: github.event_name == 'pull_request_review' || github.event_name == 'issue_comment'
+    # Mirrors the `address` job in claude-address-feedback.yml exactly. It
+    # pushes fixes (contents), resolves review threads (pull-requests),
+    # comments (issues), authenticates to the Claude action (id-token) and
+    # reads run state (actions).
+    #
+    # This job cannot work until an Anthropic credential exists. On 2026-09-01
+    # its first successful start failed with "Either ANTHROPIC_API_KEY,
+    # CLAUDE_CODE_OAUTH_TOKEN, or workload identity federation is required":
+    # the GitHub half of the auth (OIDC -> app token) succeeded, and the
+    # Anthropic half had never been set. Set ANTHROPIC_API_KEY as an
+    # ORGANISATION secret and all repositories get it at once.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
     uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
+  # Gated on a repository variable that does not exist, so this job does not
+  # run. That is not caution for its own sake -- auto-merge is genuinely unsafe
+  # on this account today, and the first real run proved it.
+  #
+  # On 2026-09-01 this job executed for the first time anywhere in the org
+  # (agent-os PR #4) and failed with `Resource not accessible by integration
+  # (mergePullRequest)`. Note the mutation named: `mergePullRequest` is the
+  # IMMEDIATE merge, not `enablePullRequestAutoMerge`. That is documented gh
+  # behaviour, not a local quirk -- cli/cli#13880 (open, filed 2026-07-14
+  # against gh 2.96.0) reports that `gh pr merge --auto` merges outright when a
+  # PR has no pending required checks.
+  #
+  # On these repositories there can BE no pending required checks. GitHub's
+  # docs are explicit: rulesets are "available in public repositories with
+  # GitHub Free and GitHub Free for organizations, and in public and private
+  # repositories with GitHub Pro, GitHub Team, and GitHub Enterprise Cloud."
+  # These repositories are private on Free. `main` is unprotected, no status
+  # check can be required, and so `--auto` does not degrade to auto-merge --
+  # it merges on contact, every time.
+  #
+  # The only thing that stopped an unreviewed PR whose own `test` job had
+  # FAILED from landing on main was this job's `contents: read` scope. A
+  # permission grant, by accident, doing the work of a gate.
+  #
+  # Do NOT set AUTO_MERGE_ENABLED until BOTH are true:
+  #   1. the org is on a plan where rulesets cover private repositories, and
+  #   2. a ruleset requires this repo's CI check to pass.
+  # Until then merging is a human act, which for a single founder costs one
+  # click and buys the only review that currently exists.
   auto-merge-gate:
-    if: github.event_name == 'pull_request' && contains(fromJSON('["opened","reopened","ready_for_review","labeled","unlabeled"]'), github.event.action)
+    if: >-
+      vars.AUTO_MERGE_ENABLED == 'true' &&
+      github.event_name == 'pull_request' &&
+      contains(fromJSON('["opened","reopened","ready_for_review","labeled","unlabeled"]'), github.event.action)
+    # Mirrors the `gate` job in auto-merge-gate.yml. It only flips the per-PR
+    # auto-merge switch; a ruleset, once one can exist, decides when anything
+    # actually merges.
+    permissions:
+      contents: read
+      pull-requests: write
     uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
