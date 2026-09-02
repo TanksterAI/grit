@@ -26,10 +26,21 @@
 # and no wider. The workflow-level default stays empty: a job added later gets
 # nothing until someone states what it needs.
 #
+# CONFLICT SWEEP -- why this file also triggers on `push`. address-feedback
+# wakes on a review or a reviewer-bot comment and nothing else. A PR that
+# CodeRabbit has already approved, with no outstanding comments, gets neither
+# -- so when another branch lands on main and that PR starts conflicting,
+# nothing wakes anything and it sits there. GitHub emits no event for it
+# either: none of the twenty-one `pull_request` activity types fires when a
+# PR becomes unmergeable because its base moved. But the base MOVING is an
+# event, so a push to main is the correct and fully event-driven trigger.
+#
 # AUTO-MERGE IS OFF, AND THAT IS DELIBERATE -- see the job below.
 name: agent-pipeline
 
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [opened, ready_for_review, reopened, labeled, unlabeled]
   pull_request_review:
@@ -38,7 +49,7 @@ on:
     types: [created]
 
 concurrency:
-  group: agent-pipeline-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: agent-pipeline-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.sha }}
   cancel-in-progress: false
 
 # Deny by default. Each job below grants only what its callee declares.
@@ -64,7 +75,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
+    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -109,4 +120,21 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@fe7f35b386161c4d39b621efe8203ef707b3c82d
+    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
+
+  # Fires when main moves, because that is the only way an open PR can become
+  # conflicted. Permissions here are the UNION of the callee's two jobs --
+  # `detect` (contents/pull-requests read) and `resolve` (the five below).
+  # A caller may never grant less than a callee declares.
+  conflict-sweep:
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: TanksterAI/.github/.github/workflows/conflict-sweep.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
+    secrets:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
