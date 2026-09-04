@@ -2,7 +2,7 @@
 name = "grit"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 description = "A context gateway for MCP servers: per-tool policy isolation, snapshot-and-rollback of local state, and AES-256-GCM credential storage."
 license = "MIT"
 

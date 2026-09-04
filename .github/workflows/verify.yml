@@ -21,9 +21,11 @@ jobs:
   ci:
     uses: TanksterAI/.github/.github/workflows/rust-ci.yml@v1
     with:
-      # Cargo.toml declares rust-version = "1.82". CI tests the version this
-      # crate actually claims to support, not whatever stable happens to be.
-      toolchain: "1.82"
+      # Cargo.toml declares rust-version = "1.85" — bumped from 1.82 because
+      # zeroize and getrandom versions already in Cargo.lock require
+      # edition2024, stabilised at 1.85. CI tests the version this crate
+      # actually claims to support, not whatever stable happens to be.
+      toolchain: "1.85"
       forbid-panics: true
       build-release: true
 

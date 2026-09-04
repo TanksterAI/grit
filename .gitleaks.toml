@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+# Extends (does not replace) gitleaks' built-in ruleset, so every default
+# detection rule stays active — this file only ever narrows one known-safe
+# finding, never the scanner's overall coverage.
+[[allowlists]]
+description = "src/secrets.rs's own tests use an obviously-fake token literal to prove the encrypted store never contains its plaintext (see the_stored_form_does_not_contain_the_plaintext). Allowlisted by the literal value itself, not by file or line, so it stays correct as the file is edited and a genuinely different secret added anywhere would still be caught."
+regexes = [
+    '''sk-live-abc123''',
+]

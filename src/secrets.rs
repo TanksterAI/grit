@@ -220,14 +220,24 @@ impl SecretStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    /// Tests set the key directly rather than through the process environment
-    /// where possible; where the env is needed it is set and removed around the
-    /// assertion. `cargo test` runs these on threads, so each test sets the
-    /// same value rather than different ones, which keeps them independent.
+    /// `KEY_ENV` is process-wide, and `cargo test` runs on threads. The
+    /// comment this replaces claimed that was safe because every test sets
+    /// the same value — true of everything routed through `with_key`, but
+    /// `a_wrong_key_fails_closed_and_says_nothing_useful` deliberately swaps
+    /// in a wrong key mid-test and does not go through `with_key` at all.
+    /// Caught in practice: a parallel run of this suite intermittently failed
+    /// `a_store_survives_a_save_and_load` with a spurious `Crypto` error, on
+    /// no change to the crypto code — it landed inside that test's window.
+    /// Every test that reads or writes `KEY_ENV` now holds this lock for the
+    /// duration, so no two can interleave.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     const TEST_KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
     fn with_key<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(KEY_ENV, TEST_KEY);
         f()
     }
@@ -308,6 +318,7 @@ mod tests {
 
     #[test]
     fn a_wrong_key_fails_closed_and_says_nothing_useful() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(KEY_ENV, TEST_KEY);
         let mut store = SecretStore::default();
         store.put("t", "value").expect("put");
@@ -367,6 +378,7 @@ mod tests {
 
     #[test]
     fn a_short_key_is_rejected_at_load() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(KEY_ENV, "00010203");
         let mut store = SecretStore::default();
         let err = store.put("t", "v").expect_err("must reject");
