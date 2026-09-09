@@ -3,7 +3,7 @@
 //! Grit sits between an MCP client and the tools it calls, and does four
 //! things: refuses tools that have no declared policy, resolves and contains
 //! every path argument, snapshots local state before anything that can mutate
-//! it, and keeps credentials encrypted until the moment a tool needs one.
+//! it, and keeps credentials encrypted at rest.
 //!
 //! # What Grit is honestly not
 //!

@@ -54,7 +54,9 @@ pub struct ToolPolicy {
     #[serde(default)]
     pub allow_network: bool,
 
-    /// Wall-clock ceiling for one call.
+    /// Intended ceiling for one call. Declared and recorded, never enforced:
+    /// Grit does not execute the tool, so there is no call it can interrupt.
+    /// See the honesty note in `lib.rs`.
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
 
