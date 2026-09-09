@@ -48,9 +48,9 @@ pub struct ToolPolicy {
     #[serde(default)]
     pub denied_roots: Vec<PathBuf>,
 
-    /// May this tool reach the network? Grit cannot enforce this at the kernel
-    /// level (see the honesty note in `lib.rs`); it scrubs proxy and endpoint
-    /// variables from the child environment and records the declaration.
+    /// May this tool reach the network? Declared and recorded, never enforced:
+    /// Grit does not execute the tool, so there is nothing it can intercept.
+    /// See the honesty note in `lib.rs`.
     #[serde(default)]
     pub allow_network: bool,
 

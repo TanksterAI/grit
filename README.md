@@ -9,8 +9,8 @@ it calls, and does four things:
    symlinks, then checked component-wise against allowed and denied roots.
 3. **Snapshots before it lets anything mutate.** If a tool may write, the
    workspace is captured first, so a bad call can be undone.
-4. **Keeps credentials encrypted.** AES-256-GCM at rest, decrypted only when a
-   tool that declared the secret actually runs.
+4. **Keeps credentials encrypted.** AES-256-GCM at rest, with a fresh nonce
+   per write and the secret's name bound in as associated data.
 
 Every decision lands in an append-only audit log.
 
@@ -85,7 +85,7 @@ println!("{} files changed", completion.drift.changed.len());
 | `allowed_roots` | `[]` | Roots this tool may touch. Empty means no filesystem access. |
 | `denied_roots` | `[]` | Checked after resolution and overriding `allowed_roots`. |
 | `allow_network` | `false` | Declared and recorded; see the honesty note above. |
-| `timeout_secs` | `30` | Wall-clock ceiling for one call. |
+| `timeout_secs` | `30` | Intended ceiling for one call. Declared and recorded; see the honesty note above. |
 | `max_output_bytes` | `1000000` | Cap on the result. An unbounded result is both a cost problem and an injection surface. |
 | `mutates` | `true` | Whether this tool may change local state. Defaults to the cautious answer. |
 | `secrets` | `[]` | Names from the store this tool may receive. |
