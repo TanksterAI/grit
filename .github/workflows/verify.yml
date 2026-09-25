@@ -48,3 +48,23 @@ jobs:
             exit 1
           fi
           echo "no unqualified sandbox claim"
+
+  # The one check the org-wide `ci-gate` ruleset requires. It passes only when every
+  # CI job listed in `needs` succeeded or was deliberately skipped, so the org rule
+  # never needs to know this repo's job names. Add new CI jobs to `needs`.
+  #
+  # security.yml is a separate workflow file, and `needs` cannot reach across
+  # files, so the security scan is not covered by this gate.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [ci, guard-sandbox-claim]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: All required CI jobs passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'to_entries | all(.value.result == "success" or .value.result == "skipped")' >/dev/null \
+            || { echo "::error::A required CI job failed or was cancelled:"; echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'; exit 1; }
