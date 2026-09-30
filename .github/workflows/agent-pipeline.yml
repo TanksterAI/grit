@@ -75,7 +75,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
+    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -120,7 +120,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
+    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
 
   # Fires when main moves, because that is the only way an open PR can become
   # conflicted. Permissions here are the UNION of the callee's two jobs --
@@ -134,7 +134,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: TanksterAI/.github/.github/workflows/conflict-sweep.yml@0e2a0be34b7f1741559e87d4b230dba6d7b4f7af
+    uses: TanksterAI/.github/.github/workflows/conflict-sweep.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
