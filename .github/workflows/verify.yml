@@ -35,7 +35,7 @@ jobs:
   # cannot do.
   guard-sandbox-claim:
     name: Guard the sandbox claim
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -59,7 +59,7 @@ jobs:
     name: ci-gate
     if: always()
     needs: [ci, guard-sandbox-claim]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - name: All required CI jobs passed
