@@ -128,8 +128,8 @@ cargo fmt --check
 
 ## Provenance and licence
 
-Designed and built by [Rishi Tank](https://rishitank.co.uk) as sole engineer, and owned by
-Tankster AI Ltd — the AI-native product studio he founded, which runs it in its own estate.
+Designed by [Rishi Tank](https://rishitank.co.uk) and built by directing AI coding agents.
+Owned by Tankster AI Ltd — the AI-native product studio he founded, which runs it in its own estate.
 Grit is one of the four components of the
 [Robustness Layer](https://rishitank.co.uk/robustness-layer), an agent-containment stack in
 which each component answers one question the others do not trust it to have answered: this
