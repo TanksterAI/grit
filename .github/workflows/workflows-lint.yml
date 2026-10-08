@@ -15,4 +15,6 @@ permissions:
 
 jobs:
   actionlint:
-    uses: TanksterAI/.github/.github/workflows/workflows-lint.yml@v1
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-workflows-lint.yml

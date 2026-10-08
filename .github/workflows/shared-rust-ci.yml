@@ -1,0 +1,129 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from TanksterAI/.github@c2c57a4eee0960894794aa47ab5d41c7a193c788
+# (.github/workflows/rust-ci.yml), which is the v1 tag and main as of 2026-10-08.
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to TanksterAI/.github/.github/workflows/rust-ci.yml@v1.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable Rust CI.
+#
+# The forbid-panics gate is lifted from agent-egress-proxy, where it turns a
+# CLAUDE.md rule ("no unwrap/expect/panic outside #[cfg(test)]") into something
+# mechanical. Generalised here so every Rust repo can opt in with one line.
+name: rust-ci
+
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: >-
+          Rust toolchain. Use the MSRV from Cargo.toml rather than `stable` if
+          the crate declares one, otherwise CI is not testing what you ship.
+        type: string
+        default: stable
+      runs-on:
+        description: >-
+          Runner label. Empty (the default) follows the organisation's
+          CI_RUNNER variable, which moves CI onto the Cloud Build fallback
+          runner when the included Actions minutes run out, and means
+          ubuntu-latest when that variable is unset.
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: "."
+      clippy-args:
+        type: string
+        default: --all-targets -- -D warnings
+      test-args:
+        type: string
+        default: --all-targets
+      build-release:
+        description: Build with --release after tests pass.
+        type: boolean
+        default: true
+      forbid-panics:
+        description: Fail if unwrap/expect/panic!/todo!/unimplemented! appear outside #[cfg(test)].
+        type: boolean
+        default: true
+      forbid-panics-path:
+        type: string
+        default: src/
+      timeout-minutes:
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${TOOLCHAIN}" --profile minimal --component rustfmt,clippy
+          rustup default "${TOOLCHAIN}"
+          rustc --version
+          cargo --version
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy ${{ inputs.clippy-args }}
+
+      - name: Test
+        run: cargo test ${{ inputs.test-args }}
+
+      # A panic path in production code is a crash written down in advance.
+      # Test modules are exempt; production code is not.
+      - name: Forbid panics outside tests
+        if: inputs.forbid-panics
+        run: |
+          set -uo pipefail
+          hits=$(
+            grep -rnE '\.unwrap\(\)|\.expect\(|panic!|todo!|unimplemented!' "${SCAN_PATH}" 2>/dev/null \
+              | grep -vE '^[^:]*:[0-9]+: *//' \
+              | while IFS=: read -r file line _rest; do
+                  if ! awk -v n="$line" 'NR<=n && /#\[cfg\(test\)\]/ {found=1} END {exit !found}' "$file"; then
+                    echo "$file:$line"
+                  fi
+                done
+          )
+          if [ -n "$hits" ]; then
+            echo "$hits" | while IFS= read -r hit; do
+              echo "::error file=${hit%%:*},line=${hit##*:}::panic path in production code"
+            done
+            echo "Panic paths found in production code. Move them behind a Result, or into a #[cfg(test)] module."
+            exit 1
+          fi
+          echo "No panic paths in production code."
+        env:
+          SCAN_PATH: ${{ inputs.forbid-panics-path }}
+
+      - name: Build release
+        if: inputs.build-release
+        run: cargo build --release

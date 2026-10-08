@@ -19,6 +19,8 @@ permissions:
 
 jobs:
   security:
-    uses: TanksterAI/.github/.github/workflows/security.yml@v1
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-security.yml
     with:
       ecosystem: rust
