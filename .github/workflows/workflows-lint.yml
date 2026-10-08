@@ -1,0 +1,18 @@
+# actionlint over this repo's workflows. Catches bad `uses:` refs, undefined
+# contexts and shell bugs in `run:` blocks before they cost a red build.
+name: workflows-lint
+
+on:
+  pull_request:
+    paths: [".github/workflows/**"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    uses: TanksterAI/.github/.github/workflows/workflows-lint.yml@v1
