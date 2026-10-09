@@ -1,10 +1,12 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
+#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
 #   .github/workflows/auto-merge-gate.yml
-# (the pin agent-pipeline uses elsewhere; the file is identical on main and
-# on TanksterAI/.github#15).
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
 #
 # Why: public repositories cannot call reusable workflows that live in a
 # private repository. Since 2026-10-05, when this repository became public,
@@ -66,8 +68,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${HAS_LABEL}" = "true" ]; then
-            echo "Opt-out label present; disabling auto-merge (if it was on)."
-            gh pr merge "${PR}" --disable-auto || true
+            # A failed opt-out must fail the job, or the label would look like
+            # it worked while auto-merge stays on. Only call --disable-auto
+            # when auto-merge is actually on, so "already off" is not an error.
+            enabled=$(gh pr view "${PR}" --json autoMergeRequest --jq '.autoMergeRequest != null')
+            if [ "${enabled}" = "true" ]; then
+              echo "Opt-out label present; disabling auto-merge."
+              gh pr merge "${PR}" --disable-auto
+            else
+              echo "Opt-out label present; auto-merge is already off."
+            fi
           else
             echo "No opt-out label; enabling auto-merge (--${MERGE_METHOD})."
             gh pr merge "${PR}" --auto "--${MERGE_METHOD}"

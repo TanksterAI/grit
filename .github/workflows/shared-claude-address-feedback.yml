@@ -1,12 +1,13 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@d2b952f87a5a39ab8c207f36e588eb27288daaba
+#   TanksterAI/.github@d3a9eefcd69db9bfc4bd12aecca22865dae6b572
 #   .github/workflows/claude-address-feedback.yml
-# That is the head of TanksterAI/.github#15: the version agent-pipeline
-# pins elsewhere (46e3c3065fbd70fa695f8b235a80c6d2e263bd01) plus a credentials job that
-# skips the Claude jobs cleanly while no Anthropic secret is set, instead
-# of failing the run.
+# That is the head of TanksterAI/.github#15 (feat/runtime-gate): the
+# version agent-pipeline pins elsewhere (46e3c30) plus a credentials job
+# that skips the Claude jobs cleanly while no Anthropic secret is set, and
+# the hardening CodeRabbit asked for on this PR (actions pinned to commit
+# SHAs, an exact allowed-bots match, same-repository PRs only).
 #
 # Why: public repositories cannot call reusable workflows that live in a
 # private repository. Since 2026-10-05, when this repository became public,
@@ -37,11 +38,20 @@
 # round counter. A single run is still bounded by timeout-minutes below as
 # ordinary runaway-job hygiene, same as every other workflow in this repo.
 #
-# Checkout mirrors Anthropic's own documented issue_comment /
-# pull_request_review example workflow (no manual ref resolution) --
-# claude-code-action resolves the correct PR head itself. fetch-depth is 0
-# rather than their 1, because this job's prompt can be asked to merge or
-# rebase against a moved base, which needs history.
+# Checkout is of the PR's head branch, resolved from the API for both
+# events: an issue_comment run would otherwise check out the default branch,
+# and a pull_request_review run the merge ref, neither of which Claude can
+# push its fix to. A PR from a fork is skipped: this job cannot push there,
+# and its code must not run next to a write token. fetch-depth is 0 so
+# Claude has the history it needs to understand the change.
+#
+# Claude does not merge or rebase (claude-code-action declines both, even
+# with the git tools allowed), so a branch that is behind or conflicts with
+# its base is reported on the PR for a person, not updated here.
+#
+# Which bots may trigger the job is the `allowed-bots` input, used both in
+# the job's condition and by the action. Logins are comma-separated with no
+# spaces.
 #
 # Authentication: see claude-review.yml in this same directory for the full
 # reasoning -- accepts either secret, both wired through unconditionally so
@@ -109,10 +119,10 @@ jobs:
       needs.credentials.outputs.available == 'true' && (
       (github.event_name == 'pull_request_review' &&
        github.event.review.state != 'approved' &&
-       contains(fromJSON('["coderabbitai[bot]","claude[bot]"]'), github.event.review.user.login)) ||
+       contains(format(',{0},', inputs.allowed-bots), format(',{0},', github.event.review.user.login))) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
-       contains(fromJSON('["coderabbitai[bot]","claude[bot]"]'), github.event.comment.user.login))
+       contains(format(',{0},', inputs.allowed-bots), format(',{0},', github.event.comment.user.login)))
       )
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -123,11 +133,35 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - name: Resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/${REPO}/pulls/${PR}" --jq '[(.head.repo.full_name // ""), .head.ref] | @tsv')
+          head_repo="${head%%$'\t'*}"
+          head_ref="${head#*$'\t'}"
+          if [ "${head_repo}" != "${REPO}" ]; then
+            echo "same-repo=false" >> "${GITHUB_OUTPUT}"
+            msg="#${PR} comes from ${head_repo:-a deleted fork}. This job cannot push there and does not run fork code next to a write token, so it is skipped."
+            echo "::notice title=Fork PR skipped::${msg}"
+            echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "same-repo=true" >> "${GITHUB_OUTPUT}"
+          echo "ref=${head_ref}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pr.outputs.same-repo == 'true'
         with:
+          ref: ${{ steps.pr.outputs.ref }}
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
+        if: steps.pr.outputs.same-repo == 'true'
         with:
           anthropic_api_key: ${{ secrets.anthropic-api-key }}
           claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
@@ -142,10 +176,9 @@ jobs:
             positive or out of scope, reply explaining why instead of
             resolving it.
 
-            If the branch is behind its base, bring it up to date yourself
-            (merge or rebase, your judgment) and resolve any textual
-            conflicts before pushing -- do not leave a conflicted branch for
-            a human.
+            Do not merge or rebase. If the branch is behind its base or
+            conflicts with it, say so in one comment on the pull request and
+            leave updating it to a person; still push the fixes you made.
 
             When everything addressable is addressed, commit with a clear
             message and push. If there is nothing left to fix, do not push

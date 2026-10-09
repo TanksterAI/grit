@@ -1,12 +1,13 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@d2b952f87a5a39ab8c207f36e588eb27288daaba
+#   TanksterAI/.github@d3a9eefcd69db9bfc4bd12aecca22865dae6b572
 #   .github/workflows/conflict-sweep.yml
-# That is the head of TanksterAI/.github#15: the version agent-pipeline
-# pins elsewhere (46e3c3065fbd70fa695f8b235a80c6d2e263bd01) plus a credentials job that
-# skips the Claude jobs cleanly while no Anthropic secret is set, instead
-# of failing the run.
+# That is the head of TanksterAI/.github#15 (feat/runtime-gate): the
+# version agent-pipeline pins elsewhere (46e3c30) plus a credentials job
+# that skips the Claude jobs cleanly while no Anthropic secret is set, and
+# the hardening CodeRabbit asked for on this PR (actions pinned to commit
+# SHAs, an exact allowed-bots match, same-repository PRs only).
 #
 # Why: public repositories cannot call reusable workflows that live in a
 # private repository. Since 2026-10-05, when this repository became public,
@@ -38,6 +39,10 @@
 # event: a push to main. So every conflict this estate can produce is
 # derivable from an event, with no polling and no drift. The caller triggers
 # on `push`, this runs seconds later.
+#
+# Only same-repository PRs are swept. A fork's head is untrusted code, and
+# the resolve job reads it with a write token and git/gh tools; it could not
+# push a resolution back to a fork anyway.
 #
 # NOT HANDLED HERE, deliberately: a PR that is merely `behind` its base with
 # no conflicts. The obvious fix -- calling the update-branch API with
@@ -136,17 +141,20 @@ jobs:
           REPO: ${{ github.repository }}
           BASE: ${{ inputs.base-branch }}
           INCLUDE_DRAFTS: ${{ inputs.include-drafts }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
-          filter='.[] | select(.state == "OPEN")'
+          # Same-repository heads only: fork code must never reach an agent
+          # that holds a write token.
+          filter='.[] | select(.state == "OPEN") | select(.isCrossRepository == false)'
           if [ "${INCLUDE_DRAFTS}" != "true" ]; then
             filter="${filter} | select(.isDraft == false)"
           fi
 
           candidates=$(gh pr list --repo "${REPO}" --base "${BASE}" \
             --state open --limit 100 \
-            --json number,isDraft,state --jq "${filter} | .number")
+            --json number,isDraft,state,isCrossRepository --jq "${filter} | .number")
 
           if [ -z "${candidates}" ]; then
             echo "No open PRs targeting ${BASE}."
@@ -202,16 +210,28 @@ jobs:
             echo "\`${json}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  # KNOWN LIMITATION: anthropics/claude-code-action@v1 rejects `push` events
-  # ("Unsupported event type: push"; it supports issues, issue_comment,
-  # pull_request(_target), pull_request_review(_comment), workflow_dispatch,
-  # repository_dispatch, schedule and workflow_run). The caller triggers on
-  # push, so once a credential is added this job must be re-triggered from a
-  # supported event before it can run.
+          # resolve cannot run on push (see the note on that job), so say
+          # plainly which PRs need a person.
+          if [ "${EVENT}" = "push" ]; then
+            echo "::warning title=Conflicted PRs::${json} now conflict with ${BASE}. They need the base merged in by hand: claude-code-action does not run on push events."
+          fi
+
+  # KNOWN LIMITATIONS, so this job is skipped on push:
+  # - anthropics/claude-code-action rejects `push` events ("Unsupported event
+  #   type: push"; it supports issues, issue_comment, pull_request(_target),
+  #   pull_request_review(_comment), workflow_dispatch, repository_dispatch,
+  #   schedule and workflow_run). The caller triggers on push, so running it
+  #   there would only turn every push to main red. detect still lists the
+  #   conflicted PRs and warns about them.
+  # - The action also declines to merge or rebase, even with the git tools
+  #   allowed, so the "merge the base in" prompt below cannot do its job from
+  #   any event. Making conflict resolution work needs a different design
+  #   (for example a workflow step that merges, with Claude resolving only
+  #   the conflicted files); until then this job stays dormant.
   resolve:
     name: "Resolve #${{ matrix.pr }}"
     needs: [credentials, detect]
-    if: needs.credentials.outputs.available == 'true' && (needs.detect.outputs.conflicted != '[]')
+    if: github.event_name != 'push' && needs.credentials.outputs.available == 'true' && (needs.detect.outputs.conflicted != '[]')
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     strategy:
@@ -228,11 +248,11 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
         with:
           anthropic_api_key: ${{ secrets.anthropic-api-key }}
           claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}

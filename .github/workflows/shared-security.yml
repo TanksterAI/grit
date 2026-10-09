@@ -1,14 +1,19 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
-# Copied verbatim from TanksterAI/.github@c2c57a4eee0960894794aa47ab5d41c7a193c788
-# (.github/workflows/security.yml), which is the v1 tag and main as of 2026-10-08.
+# Copied verbatim from
+#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
+#   .github/workflows/security.yml
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
 #
 # Why: public repositories cannot call reusable workflows that live in a
 # private repository. Since 2026-10-05, when this repository became public,
 # every run that called TanksterAI/.github failed at startup with zero jobs.
 #
 # If TanksterAI/.github becomes public, delete this file and switch the
-# caller back to TanksterAI/.github/.github/workflows/security.yml@v1.
+# caller back to the shared file at the pin the rest of the org uses.
 # This file holds no secrets; it only reads inputs and named secrets.
 
 # Reusable security scan.
@@ -21,6 +26,10 @@
 #   gitleaks     secrets, CLI form (MIT). The gitleaks *Action* needs a licence
 #                key for org-owned repos; the CLI does not.
 #   native audit npm audit / pip-audit / cargo-audit for ecosystem-specific advisories
+#
+# No job pushes, so no checkout keeps the token: the audit job installs and
+# runs third-party code (pip install, cargo install), which must not find it
+# in .git/config. Actions are pinned to commit SHAs.
 name: security
 
 on:
@@ -92,13 +101,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The sub-action, not the reusable workflow: the reusable one uploads
       # SARIF to code scanning, which needs GitHub Code Security on private
       # repos. This one just scans and exits non-zero on findings.
       - name: osv-scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2.5.0
+        uses: google/osv-scanner-action/osv-scanner-action@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
         with:
           scan-args: ${{ inputs.osv-scan-args }}
 
@@ -110,8 +121,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Full history so `gitleaks git` can see secrets that were committed
           # and later deleted. fetch-depth: 0 is required for that to mean anything.
           # Quoted deliberately: in GitHub expressions 0 is falsy, so an unquoted
@@ -148,14 +160,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: inputs.ecosystem == 'node'
         with:
           node-version-file: ${{ inputs.node-version-file }}
 
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: inputs.ecosystem == 'python'
         with:
           python-version: ${{ inputs.python-version }}
