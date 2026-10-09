@@ -1,0 +1,89 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
+#   .github/workflows/auto-merge-gate.yml
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable auto-merge gate.
+#
+# Turns auto-merge on for every PR into the default branch the moment it's
+# opened, unless it carries the opt-out label -- and turns it back off if
+# that label is added later, or on again if the label is removed.
+#
+# The actual merge timing is entirely governed by the TanksterAI org ruleset
+# (required status checks + require all conversations resolved), not by
+# anything in this file: this file only flips the one switch GitHub
+# rulesets don't cover -- the per-PR opt-in that `gh pr merge --auto`
+# requires -- and never merges anything itself.
+#
+# Requires the repository's own "Allow auto-merge" setting to already be on
+# (Settings -> General -> Pull Requests). Until that's flipped, this job
+# fails loudly and visibly on every PR -- expected, not a bug, during
+# rollout before that repo setting is turned on.
+name: auto-merge-gate
+
+on:
+  workflow_call:
+    inputs:
+      merge-method:
+        description: squash, merge, or rebase. Must be enabled in the repo's own merge-button settings.
+        type: string
+        default: squash
+      label:
+        description: Label that opts a PR out of auto-merge.
+        type: string
+        default: needs-human-review
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Set auto-merge
+    # Only PRs into the default branch: that is the branch the org ruleset
+    # protects. A PR into any other branch may have no required checks or
+    # review, and turning auto-merge on there would merge it at once.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Enable or disable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.html_url }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, inputs.label) }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_LABEL}" = "true" ]; then
+            # A failed opt-out must fail the job, or the label would look like
+            # it worked while auto-merge stays on. Only call --disable-auto
+            # when auto-merge is actually on, so "already off" is not an error.
+            enabled=$(gh pr view "${PR}" --json autoMergeRequest --jq '.autoMergeRequest != null')
+            if [ "${enabled}" = "true" ]; then
+              echo "Opt-out label present; disabling auto-merge."
+              gh pr merge "${PR}" --disable-auto
+            else
+              echo "Opt-out label present; auto-merge is already off."
+            fi
+          else
+            echo "No opt-out label; enabling auto-merge (--${MERGE_METHOD})."
+            gh pr merge "${PR}" --auto "--${MERGE_METHOD}"
+          fi

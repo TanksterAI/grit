@@ -1,0 +1,215 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
+#   .github/workflows/security.yml
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable security scan.
+#
+# Deliberately does NOT use CodeQL or upload SARIF: both require GitHub Code
+# Security on private repositories, and most of this estate is private. Every
+# tool below is free and works identically on public and private repos.
+#
+#   osv-scanner  vulnerable dependencies across npm / PyPI / crates / Go
+#   gitleaks     secrets, CLI form (MIT). The gitleaks *Action* needs a licence
+#                key for org-owned repos; the CLI does not.
+#   native audit npm audit / pip-audit / cargo-audit for ecosystem-specific advisories
+#
+# No job pushes, so no checkout keeps the token: the audit job installs and
+# runs third-party code (pip install, cargo install), which must not find it
+# in .git/config. Actions are pinned to commit SHAs.
+name: security
+
+on:
+  workflow_call:
+    inputs:
+      ecosystem:
+        description: node, python, rust, or none. Drives the native audit step.
+        type: string
+        default: none
+      runs-on:
+        description: >-
+          Runner label. Empty (the default) follows the organisation's
+          CI_RUNNER variable, which moves CI onto the Cloud Build fallback
+          runner when the included Actions minutes run out, and means
+          ubuntu-latest when that variable is unset.
+        type: string
+        default: ""
+      osv:
+        type: boolean
+        default: true
+      osv-scan-args:
+        description: Newline-separated osv-scanner arguments.
+        type: string
+        default: |
+          --recursive
+          ./
+      gitleaks:
+        type: boolean
+        default: true
+      gitleaks-version:
+        type: string
+        default: 8.30.1
+      gitleaks-history:
+        description: >-
+          Scan full git history rather than just the working tree. Slower, but a
+          secret that was committed and later removed is still a leaked secret.
+        type: boolean
+        default: true
+      audit-strict:
+        description: >-
+          Fail the build on native-audit findings. Advisory by default because a
+          transitive advisory with no fix available should not block an
+          unrelated PR; osv-scanner and gitleaks are blocking regardless.
+        type: boolean
+        default: false
+      audit-level:
+        description: npm audit severity threshold.
+        type: string
+        default: high
+      node-version-file:
+        type: string
+        default: .nvmrc
+      python-version:
+        type: string
+        default: "3.12"
+      timeout-minutes:
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: Vulnerable dependencies
+    if: inputs.osv
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The sub-action, not the reusable workflow: the reusable one uploads
+      # SARIF to code scanning, which needs GitHub Code Security on private
+      # repos. This one just scans and exits non-zero on findings.
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
+        with:
+          scan-args: ${{ inputs.osv-scan-args }}
+
+  secrets:
+    name: Secrets
+    if: inputs.gitleaks
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history so `gitleaks git` can see secrets that were committed
+          # and later deleted. fetch-depth: 0 is required for that to mean anything.
+          # Quoted deliberately: in GitHub expressions 0 is falsy, so an unquoted
+          # `x && 0 || 1` always yields 1. The strings are both truthy.
+          fetch-depth: ${{ inputs.gitleaks-history && '0' || '1' }}
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 "$url" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+        env:
+          VERSION: ${{ inputs.gitleaks-version }}
+
+      - name: Scan
+        run: |
+          set -euo pipefail
+          if [ "${HISTORY}" = "true" ]; then
+            gitleaks git . --redact --verbose --exit-code 1
+          else
+            gitleaks dir . --redact --verbose --exit-code 1
+          fi
+        env:
+          HISTORY: ${{ inputs.gitleaks-history }}
+
+  audit:
+    name: Ecosystem audit
+    if: inputs.ecosystem != 'none'
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: inputs.ecosystem == 'node'
+        with:
+          node-version-file: ${{ inputs.node-version-file }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: inputs.ecosystem == 'python'
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Audit
+        continue-on-error: ${{ !inputs.audit-strict }}
+        run: |
+          set -euo pipefail
+          case "${ECOSYSTEM}" in
+            node)
+              npm audit --audit-level="${AUDIT_LEVEL}"
+              ;;
+            python)
+              pip install pip-audit
+              if [ -f requirements.txt ]; then
+                pip-audit -r requirements.txt
+              else
+                pip install -e .
+                pip-audit
+              fi
+              ;;
+            rust)
+              cargo install cargo-audit --locked
+              cargo audit
+              ;;
+            *)
+              echo "::error title=Unknown ecosystem::'${ECOSYSTEM}' is not one of node, python, rust, none."
+              exit 1
+              ;;
+          esac
+        env:
+          ECOSYSTEM: ${{ inputs.ecosystem }}
+          AUDIT_LEVEL: ${{ inputs.audit-level }}
+
+      - name: Note advisory mode
+        if: ${{ !inputs.audit-strict }}
+        run: |
+          {
+            echo "### Ecosystem audit is advisory"
+            echo
+            echo "\`audit-strict\` is false, so findings above did not fail the build."
+            echo "osv-scanner and gitleaks are blocking regardless."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,20 @@
+# actionlint over this repo's workflows. Catches bad `uses:` refs, undefined
+# contexts and shell bugs in `run:` blocks before they cost a red build.
+name: workflows-lint
+
+on:
+  pull_request:
+    paths: [".github/workflows/**"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-workflows-lint.yml

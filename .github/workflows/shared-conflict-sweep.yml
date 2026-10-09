@@ -1,0 +1,294 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@d3a9eefcd69db9bfc4bd12aecca22865dae6b572
+#   .github/workflows/conflict-sweep.yml
+# That is the head of TanksterAI/.github#15 (feat/runtime-gate): the
+# version agent-pipeline pins elsewhere (46e3c30) plus a credentials job
+# that skips the Claude jobs cleanly while no Anthropic secret is set, and
+# the hardening CodeRabbit asked for on this PR (actions pinned to commit
+# SHAs, an exact allowed-bots match, same-repository PRs only).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Resolves pull requests that a push to the base branch has just broken.
+#
+# THE GAP THIS CLOSES. claude-address-feedback.yml wakes on exactly two
+# things: a review being submitted, and a comment from a reviewer bot. A PR
+# that CodeRabbit has already approved, with no outstanding comments, gets
+# neither -- so when another branch lands on main and that PR starts
+# conflicting, nothing wakes anything. The PR sits there indefinitely.
+# tankster-core#7 has been in precisely that state since 10 August 2026.
+#
+# GitHub will not tell you. There are twenty-one `pull_request` activity
+# types and not one of them fires when a PR becomes unmergeable because its
+# base moved. GitHub does not even compute the answer until asked: the REST
+# docs say "If the value is null, then GitHub has started a background job to
+# compute the mergeability... After giving the job time to complete, resubmit
+# the request." Hence the retry loop below -- which is a few seconds inside
+# one run, not a schedule.
+#
+# THIS IS STILL EVENT-DRIVEN, and that is the point. A PR can only become
+# conflicted when its base branch moves, and the base branch moving IS an
+# event: a push to main. So every conflict this estate can produce is
+# derivable from an event, with no polling and no drift. The caller triggers
+# on `push`, this runs seconds later.
+#
+# Only same-repository PRs are swept. A fork's head is untrusted code, and
+# the resolve job reads it with a write token and git/gh tools; it could not
+# push a resolution back to a fork anyway.
+#
+# NOT HANDLED HERE, deliberately: a PR that is merely `behind` its base with
+# no conflicts. The obvious fix -- calling the update-branch API with
+# GITHUB_TOKEN -- pushes a commit that GitHub will not run workflows on, so
+# the PR would carry stale check results into a merge. Merge queues solve
+# this properly and are Enterprise Cloud only on private repositories. Left
+# alone rather than half-solved.
+name: conflict-sweep
+
+on:
+  workflow_call:
+    inputs:
+      base-branch:
+        description: The branch whose movement can break open PRs.
+        type: string
+        default: main
+      include-drafts:
+        description: >-
+          Sweep draft PRs too. Off by default: a draft is parked on purpose,
+          and resolving conflicts underneath someone still working is not a
+          favour.
+        type: boolean
+        default: false
+      allowed-bots:
+        description: >-
+          Bot logins whose push may trigger a sweep. A merge performed by
+          auto-merge is attributed to a bot, so the sweep must accept those
+          or it will refuse to run in exactly the situation it exists for.
+        type: string
+        default: "coderabbitai[bot],claude[bot],github-actions[bot]"
+      timeout-minutes:
+        type: number
+        default: 30
+    secrets:
+      anthropic-api-key:
+        required: false
+      claude-code-oauth-token:
+        required: false
+
+permissions:
+  contents: read
+
+# Two merges in quick succession must not both try to fix the same PR.
+# Queue rather than cancel: cancelling would abandon a half-written merge
+# resolution on someone's branch.
+concurrency:
+  group: conflict-sweep-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  # No Anthropic credential means claude-code-action fails on its first step
+  # and the caller shows a red run for something nobody asked it to do. Check
+  # first and skip cleanly instead -- detect included, since its only purpose
+  # is to feed resolve. The secrets are tested for presence only, through
+  # env, and never printed.
+  credentials:
+    name: Check Anthropic credential
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions: {}
+    timeout-minutes: 2
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check for an Anthropic credential
+        id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic-api-key }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.claude-code-oauth-token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANTHROPIC_API_KEY}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+          msg="Conflict sweep is skipped because no Anthropic credential is configured. Set the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN organisation secret to enable it."
+          echo "::notice title=Claude skipped::${msg}"
+          echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+
+  detect:
+    name: Find newly conflicted PRs
+    needs: credentials
+    if: needs.credentials.outputs.available == 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      conflicted: ${{ steps.scan.outputs.conflicted }}
+    steps:
+      - name: Scan open PRs
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base-branch }}
+          INCLUDE_DRAFTS: ${{ inputs.include-drafts }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          # Same-repository heads only: fork code must never reach an agent
+          # that holds a write token.
+          filter='.[] | select(.state == "OPEN") | select(.isCrossRepository == false)'
+          if [ "${INCLUDE_DRAFTS}" != "true" ]; then
+            filter="${filter} | select(.isDraft == false)"
+          fi
+
+          candidates=$(gh pr list --repo "${REPO}" --base "${BASE}" \
+            --state open --limit 100 \
+            --json number,isDraft,state,isCrossRepository --jq "${filter} | .number")
+
+          if [ -z "${candidates}" ]; then
+            echo "No open PRs targeting ${BASE}."
+            echo 'conflicted=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          conflicted=""
+
+          while IFS= read -r pr; do
+            [ -z "${pr}" ] && continue
+
+            # mergeable is computed lazily and comes back null while GitHub
+            # works it out. Ask again rather than treating null as clean --
+            # reading null as "fine" is how this check would silently pass
+            # over every PR it exists to catch.
+            state="null"; mergeable="null"
+            for _ in 1 2 3 4 5 6 7 8; do
+              read -r mergeable state < <(gh api "repos/${REPO}/pulls/${pr}" \
+                --jq '[(.mergeable | tostring), (.mergeable_state // "unknown")] | @tsv' 2>/dev/null || echo "null unknown")
+              case "${mergeable}" in true|false) break ;; esac
+              sleep 4
+            done
+
+            case "${mergeable}" in
+              false)
+                echo "conflicted  #${pr} (mergeable_state: ${state})"
+                conflicted="${conflicted}${pr}"$'\n'
+                ;;
+              true)
+                echo "ok          #${pr} (${state})"
+                ;;
+              *)
+                # Eight attempts, still no answer. Say so rather than
+                # recording a clean result nobody verified.
+                echo "::warning::#${pr}: GitHub did not finish computing mergeability; not swept this run"
+                ;;
+            esac
+          done <<< "${candidates}"
+
+          if [ -z "${conflicted}" ]; then
+            echo 'conflicted=[]' >> "${GITHUB_OUTPUT}"
+            echo "Nothing conflicted." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          json=$(echo "${conflicted}" | jq -R 'select(length > 0) | tonumber' | jq -sc .)
+          echo "conflicted=${json}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### Conflicted after this push"
+            echo
+            echo "\`${json}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          # resolve cannot run on push (see the note on that job), so say
+          # plainly which PRs need a person.
+          if [ "${EVENT}" = "push" ]; then
+            echo "::warning title=Conflicted PRs::${json} now conflict with ${BASE}. They need the base merged in by hand: claude-code-action does not run on push events."
+          fi
+
+  # KNOWN LIMITATIONS, so this job is skipped on push:
+  # - anthropics/claude-code-action rejects `push` events ("Unsupported event
+  #   type: push"; it supports issues, issue_comment, pull_request(_target),
+  #   pull_request_review(_comment), workflow_dispatch, repository_dispatch,
+  #   schedule and workflow_run). The caller triggers on push, so running it
+  #   there would only turn every push to main red. detect still lists the
+  #   conflicted PRs and warns about them.
+  # - The action also declines to merge or rebase, even with the git tools
+  #   allowed, so the "merge the base in" prompt below cannot do its job from
+  #   any event. Making conflict resolution work needs a different design
+  #   (for example a workflow step that merges, with Claude resolving only
+  #   the conflicted files); until then this job stays dormant.
+  resolve:
+    name: "Resolve #${{ matrix.pr }}"
+    needs: [credentials, detect]
+    if: github.event_name != 'push' && needs.credentials.outputs.available == 'true' && (needs.detect.outputs.conflicted != '[]')
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      # One failing resolution must not stop the others, and three at a time
+      # keeps a busy merge from opening ten paid agent sessions at once.
+      max-parallel: 3
+      matrix:
+        pr: ${{ fromJSON(needs.detect.outputs.conflicted) }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
+        with:
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          allowed_bots: ${{ inputs.allowed-bots }}
+          prompt: |
+            Pull request #${{ matrix.pr }} in this repository now conflicts
+            with its base branch. Check it out with
+            `gh pr checkout ${{ matrix.pr }}` and resolve the conflicts.
+
+            MERGE THE BASE IN. Do not rebase and do not force-push. A
+            force-push dismisses CodeRabbit's existing review and restarts
+            the review from nothing; a merge commit keeps the thread history
+            and the approval intact. This is the opposite of what you would
+            do by hand, and it is deliberate.
+
+            Resolve each conflict on its merits, keeping both sides' intent
+            wherever they are compatible. If a conflict is genuinely
+            ambiguous -- where choosing a side would silently discard
+            somebody's logic rather than reconcile it -- do NOT guess. Leave
+            that conflict in place, comment on the PR naming the exact file
+            and hunk you could not resolve and why, and stop. A wrong
+            resolution is worse than an unresolved one, because it looks
+            finished.
+
+            If the repository has a test suite, run it before pushing. A
+            resolution that merges cleanly and breaks the tests is not a
+            resolution.
+
+            Then commit and push.
+
+            Do not approve this pull request, do not enable auto-merge, and
+            do not merge it. Your work ends at the push. CodeRabbit reviews
+            the resolution commit, and its approval is what opens the merge
+            gate. That is on purpose: conflict resolution is exactly where a
+            change gets quietly dropped, so it faces a reviewer like any
+            other change.
+          claude_args: >-
+            --allowedTools
+            "mcp__github_inline_comment__create_inline_comment,Bash(git:*),Bash(gh:*)"

@@ -1,0 +1,188 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@d3a9eefcd69db9bfc4bd12aecca22865dae6b572
+#   .github/workflows/claude-address-feedback.yml
+# That is the head of TanksterAI/.github#15 (feat/runtime-gate): the
+# version agent-pipeline pins elsewhere (46e3c30) plus a credentials job
+# that skips the Claude jobs cleanly while no Anthropic secret is set, and
+# the hardening CodeRabbit asked for on this PR (actions pinned to commit
+# SHAs, an exact allowed-bots match, same-repository PRs only).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable Claude feedback-resolution loop.
+#
+# Fires when CodeRabbit or claude-review.yml leave comments on a PR. Reads
+# every unresolved review thread, fixes what's real, resolves what it fixed,
+# replies (without resolving) to what it disagrees with, and pushes.
+#
+# Pushing under the Claude GitHub App's own identity -- not this job's
+# default GITHUB_TOKEN -- is deliberate: GitHub does not re-run workflows on
+# commits authored by the default GITHUB_TOKEN, which would silently break
+# the loop (no re-triggered CI, no re-triggered review) on every fix it
+# made. Do not add a github_token input here for that reason. See
+# https://code.claude.com/docs/en/github-actions#ci-not-running-on-claudes-commits.
+#
+# Self-terminating by construction: nothing left to fix means no commit,
+# means no push, means no new pull_request `synchronize` event, means the
+# chain ends on its own. No iteration-round cap is enforced here
+# deliberately -- the TanksterAI org ruleset (required status checks +
+# require all conversations resolved) is what actually gates merge, not a
+# round counter. A single run is still bounded by timeout-minutes below as
+# ordinary runaway-job hygiene, same as every other workflow in this repo.
+#
+# Checkout is of the PR's head branch, resolved from the API for both
+# events: an issue_comment run would otherwise check out the default branch,
+# and a pull_request_review run the merge ref, neither of which Claude can
+# push its fix to. A PR from a fork is skipped: this job cannot push there,
+# and its code must not run next to a write token. fetch-depth is 0 so
+# Claude has the history it needs to understand the change.
+#
+# Claude does not merge or rebase (claude-code-action declines both, even
+# with the git tools allowed), so a branch that is behind or conflicts with
+# its base is reported on the PR for a person, not updated here.
+#
+# Which bots may trigger the job is the `allowed-bots` input, used both in
+# the job's condition and by the action. Logins are comma-separated with no
+# spaces.
+#
+# Authentication: see claude-review.yml in this same directory for the full
+# reasoning -- accepts either secret, both wired through unconditionally so
+# a future switch is a secrets-page change only. This is the job most
+# exposed to the OAuth token's pooled-quota trade-off documented there: it
+# is the one with no iteration cap, per Rishi's explicit choice, so it's the
+# one most able to run up against a shared personal quota on a busy PR day.
+# Watch it first if usage is going to be watched at all.
+name: claude-address-feedback
+
+on:
+  workflow_call:
+    inputs:
+      allowed-bots:
+        description: >-
+          Comma-separated bot logins allowed to trigger this workflow. Add a
+          new reviewer bot's login here when one is introduced.
+        type: string
+        default: "coderabbitai[bot],claude[bot]"
+      timeout-minutes:
+        type: number
+        default: 30
+    secrets:
+      anthropic-api-key:
+        required: false
+      claude-code-oauth-token:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # No Anthropic credential means claude-code-action fails on its first step
+  # and the caller shows a red run for something nobody asked it to do. Check
+  # first and skip cleanly instead. The secrets are tested for presence only,
+  # through env, and never printed.
+  credentials:
+    name: Check Anthropic credential
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions: {}
+    timeout-minutes: 2
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check for an Anthropic credential
+        id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic-api-key }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.claude-code-oauth-token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANTHROPIC_API_KEY}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+          msg="Address feedback is skipped because no Anthropic credential is configured. Set the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN organisation secret to enable it."
+          echo "::notice title=Claude skipped::${msg}"
+          echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+
+  address:
+    name: Address feedback
+    needs: credentials
+    if: >-
+      needs.credentials.outputs.available == 'true' && (
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state != 'approved' &&
+       contains(format(',{0},', inputs.allowed-bots), format(',{0},', github.event.review.user.login))) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(format(',{0},', inputs.allowed-bots), format(',{0},', github.event.comment.user.login)))
+      )
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/${REPO}/pulls/${PR}" --jq '[(.head.repo.full_name // ""), .head.ref] | @tsv')
+          head_repo="${head%%$'\t'*}"
+          head_ref="${head#*$'\t'}"
+          if [ "${head_repo}" != "${REPO}" ]; then
+            echo "same-repo=false" >> "${GITHUB_OUTPUT}"
+            msg="#${PR} comes from ${head_repo:-a deleted fork}. This job cannot push there and does not run fork code next to a write token, so it is skipped."
+            echo "::notice title=Fork PR skipped::${msg}"
+            echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "same-repo=true" >> "${GITHUB_OUTPUT}"
+          echo "ref=${head_ref}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pr.outputs.same-repo == 'true'
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
+        if: steps.pr.outputs.same-repo == 'true'
+        with:
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          allowed_bots: ${{ inputs.allowed-bots }}
+          prompt: |
+            Read every unresolved review thread and unaddressed review comment
+            on this pull request, from CodeRabbit and from your own prior
+            review.
+
+            For each one that identifies a real issue: fix it in the code,
+            then resolve that review thread. If a comment is a false
+            positive or out of scope, reply explaining why instead of
+            resolving it.
+
+            Do not merge or rebase. If the branch is behind its base or
+            conflicts with it, say so in one comment on the pull request and
+            leave updating it to a person; still push the fixes you made.
+
+            When everything addressable is addressed, commit with a clear
+            message and push. If there is nothing left to fix, do not push
+            an empty commit -- just stop.
+          claude_args: >-
+            --allowedTools
+            "mcp__github_inline_comment__create_inline_comment,Bash(git:*),Bash(gh:*)"

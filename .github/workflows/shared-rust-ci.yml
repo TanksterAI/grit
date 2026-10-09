@@ -1,0 +1,188 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
+#   .github/workflows/rust-ci.yml
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable Rust CI.
+#
+# The forbid-panics gate is lifted from agent-egress-proxy, where it turns a
+# CLAUDE.md rule ("no unwrap/expect/panic outside #[cfg(test)]") into something
+# mechanical. Generalised here so every Rust repo can opt in with one line.
+#
+# Nothing here pushes, so checkout does not keep the token: cargo runs build
+# scripts and proc macros from dependencies, and they must not find it in
+# .git/config. Caller inputs reach shell steps through env, never through
+# ${{ }} inside a script.
+name: rust-ci
+
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: >-
+          Rust toolchain. Use the MSRV from Cargo.toml rather than `stable` if
+          the crate declares one, otherwise CI is not testing what you ship.
+        type: string
+        default: stable
+      runs-on:
+        description: >-
+          Runner label. Empty (the default) follows the organisation's
+          CI_RUNNER variable, which moves CI onto the Cloud Build fallback
+          runner when the included Actions minutes run out, and means
+          ubuntu-latest when that variable is unset.
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: "."
+      clippy-args:
+        type: string
+        default: --all-targets -- -D warnings
+      test-args:
+        type: string
+        default: --all-targets
+      build-release:
+        description: Build with --release after tests pass.
+        type: boolean
+        default: true
+      forbid-panics:
+        description: >-
+          Fail if unwrap/expect/panic!/todo!/unimplemented! appear in .rs files
+          outside the items a #[cfg(test)] or #[test] attribute covers. A text
+          heuristic, not a parser: see the step for its limits.
+        type: boolean
+        default: true
+      forbid-panics-path:
+        type: string
+        default: src/
+      timeout-minutes:
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${TOOLCHAIN}" --profile minimal --component rustfmt,clippy
+          rustup default "${TOOLCHAIN}"
+          rustc --version
+          cargo --version
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # The args are several flags, so they are split on whitespace (read -a,
+      # which does not glob), and they arrive through env so a caller's value
+      # is data, never shell code.
+      - name: Clippy
+        run: |
+          set -euo pipefail
+          read -r -a args <<< "${CLIPPY_ARGS}"
+          cargo clippy "${args[@]}"
+        env:
+          CLIPPY_ARGS: ${{ inputs.clippy-args }}
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          read -r -a args <<< "${TEST_ARGS}"
+          cargo test "${args[@]}"
+        env:
+          TEST_ARGS: ${{ inputs.test-args }}
+
+      # A panic path in production code is a crash written down in advance.
+      # Test code is exempt; production code is not.
+      #
+      # A heuristic over the text, not a Rust parser. Exempt: the item a
+      # #[cfg(test)] or test attribute (#[test], #[tokio::test], ...) covers,
+      # from the attribute to the closing brace of the block it opens (or the
+      # ";" ending e.g. `mod tests;`), and whole files that start with
+      # #![cfg(test)]. Code after a test item is scanned again. A test module
+      # in its own file (`#[cfg(test)] mod tests;`) is not followed into that
+      # file, so start the file with #![cfg(test)]; otherwise its panics are
+      # reported, which fails the job rather than hiding anything. Ignored:
+      # text after "//" (so comments and doc comments).
+      # Not understood: braces or "//" inside string literals, and /* */
+      # comments, so an unusual file can be misjudged either way. Clippy's
+      # unwrap_used / expect_used / panic lints are the parser-exact
+      # alternative where a crate can adopt them.
+      - name: Forbid panics outside tests
+        if: inputs.forbid-panics
+        run: |
+          set -euo pipefail
+          # A scan that cannot run must fail, not report a clean result.
+          if [ ! -e "${SCAN_PATH}" ] || [ ! -r "${SCAN_PATH}" ]; then
+            echo "::error title=Panic scan::forbid-panics-path '${SCAN_PATH}' does not exist or cannot be read"
+            exit 1
+          fi
+          # shellcheck disable=SC2016 # an awk program, not shell
+          prog='
+            FNR == 1 { pending = 0; depth = 0; intest = 0; filetest = 0 }
+            {
+              code = $0
+              sub(/\/\/.*/, "", code)
+              if (FNR <= 50 && code ~ /^[[:space:]]*#!\[cfg\(test\)\]/) filetest = 1
+              testline = filetest || intest
+              if (!intest && code ~ /#\[(cfg\(test\)|([A-Za-z_][A-Za-z0-9_]*::)*test[](])/) pending = 1
+              if (pending || intest) {
+                testline = 1
+                n = split(code, ch, "")
+                for (i = 1; i <= n; i++) {
+                  if (ch[i] == "{") { depth++; if (pending) { pending = 0; intest = 1 } }
+                  else if (ch[i] == "}") { depth--; if (intest && depth <= 0) { intest = 0; depth = 0 } }
+                  else if (ch[i] == ";" && pending && depth == 0) pending = 0
+                }
+              }
+              if (!testline && code ~ /\.unwrap\(\)|\.expect\(|panic!|todo!|unimplemented!/) print FILENAME ":" FNR
+            }'
+          hits=$(find "${SCAN_PATH}" -type f -name '*.rs' -print0 | xargs -0 -r awk "${prog}")
+          if [ -n "$hits" ]; then
+            echo "$hits" | while IFS= read -r hit; do
+              echo "::error file=${hit%%:*},line=${hit##*:}::panic path in production code"
+            done
+            echo "Panic paths found in production code. Move them behind a Result, or into a #[cfg(test)] module."
+            exit 1
+          fi
+          echo "No panic paths in production code."
+        env:
+          SCAN_PATH: ${{ inputs.forbid-panics-path }}
+
+      - name: Build release
+        if: inputs.build-release
+        run: cargo build --release

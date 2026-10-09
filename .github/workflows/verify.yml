@@ -1,7 +1,9 @@
-# CI is defined once in TanksterAI/.github and called from here.
-# Change the shared pipeline there, not in this file. The sandbox-claim guard
-# below is Grit-specific and stays local — it has no home in a shared
-# workflow used by repos that make no sandboxing claim to guard.
+# CI is defined once in TanksterAI/.github. This repository is public and
+# cannot call that private repository, so it runs a vendored copy
+# (shared-rust-ci.yml). Change the shared pipeline there and re-copy it,
+# not in this file. The sandbox-claim guard below is Grit-specific and stays
+# local — it has no home in a shared workflow used by repos that make no
+# sandboxing claim to guard.
 name: ci
 
 on:
@@ -19,7 +21,9 @@ permissions:
 
 jobs:
   ci:
-    uses: TanksterAI/.github/.github/workflows/rust-ci.yml@v1
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-rust-ci.yml
     with:
       # Cargo.toml declares rust-version = "1.85" — bumped from 1.82 because
       # zeroize and getrandom versions already in Cargo.lock require

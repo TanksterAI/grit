@@ -36,6 +36,13 @@
 # event, so a push to main is the correct and fully event-driven trigger.
 #
 # AUTO-MERGE IS OFF, AND THAT IS DELIBERATE -- see the job below.
+#
+# PUBLIC-REPOSITORY VARIANT. This repository is public, and a public
+# repository cannot call reusable workflows in the private TanksterAI/.github
+# (every run failed at startup with zero jobs from 2026-10-05). So the three
+# callees below are vendored copies in this directory (shared-*.yml).
+# Private repositories must NOT copy this file: they call
+# TanksterAI/.github/.github/workflows/<name>.yml at the org-wide pin.
 name: agent-pipeline
 
 on:
@@ -75,7 +82,9 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: TanksterAI/.github/.github/workflows/claude-address-feedback.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-claude-address-feedback.yml
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -120,7 +129,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: TanksterAI/.github/.github/workflows/auto-merge-gate.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-auto-merge-gate.yml
 
   # Fires when main moves, because that is the only way an open PR can become
   # conflicted. Permissions here are the UNION of the callee's two jobs --
@@ -134,7 +145,9 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: TanksterAI/.github/.github/workflows/conflict-sweep.yml@46e3c3065fbd70fa695f8b235a80c6d2e263bd01
+    # Vendored copy: this repository is public and cannot call the private
+    # TanksterAI/.github. Provenance and the way back are in that file's header.
+    uses: ./.github/workflows/shared-conflict-sweep.yml
     secrets:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

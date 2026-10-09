@@ -1,0 +1,206 @@
+# VENDORED COPY. Do not edit below this header; re-copy from the source.
+#
+# Copied verbatim from
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
+#   .github/workflows/workflows-lint.yml
+# That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
+# main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
+# pinned to commit SHAs, persist-credentials: false, caller inputs passed
+# to the shell through env).
+#
+# Why: public repositories cannot call reusable workflows that live in a
+# private repository. Since 2026-10-05, when this repository became public,
+# every run that called TanksterAI/.github failed at startup with zero jobs.
+#
+# If TanksterAI/.github becomes public, delete this file and switch the
+# caller back to the shared file at the pin the rest of the org uses.
+# This file holds no secrets; it only reads inputs and named secrets.
+
+# Reusable actionlint runner.
+#
+# Ported from talos-automaton's composite action. Resolves the latest actionlint
+# at run time and caches the binary by resolved version, so the tool stays
+# current without a version string to maintain, and falls back to a known-good
+# release if the API call fails.
+#
+# Cheap and worth running on every repo that has workflows: it catches YAML
+# errors, bad `uses:` refs, undefined contexts and shellcheck issues in `run:`
+# blocks before they cost a red build.
+#
+# It also stops jobs from hard-coding a GitHub-hosted Ubuntu runner. Such a
+# job ignores the organisation's CI_RUNNER variable, so it stops running when
+# the included Actions minutes run out while everything else moves to the
+# fallback runner. A job that really must stay on a GitHub-hosted runner says
+# so with a `# hosted-only` comment on its runs-on line (or on the label).
+#
+# Nothing here pushes, so checkout does not keep the token, and the actions
+# are pinned to commit SHAs. The actionlint binary matches the runner's OS
+# (Linux or macOS) and architecture (x64 or arm64), and the cache key
+# includes both.
+name: workflows-lint
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          Runner label. Empty (the default) follows the organisation's
+          CI_RUNNER variable, which moves CI onto the Cloud Build fallback
+          runner when the included Actions minutes run out, and means
+          ubuntu-latest when that variable is unset.
+        type: string
+        default: ""
+      fallback-version:
+        description: Used only if the GitHub API cannot be reached.
+        type: string
+        default: v1.7.7
+      shellcheck:
+        description: Let actionlint run shellcheck over `run:` blocks.
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 10
+      runner-policy:
+        description: >-
+          What to do about a job-level runs-on that hard-codes a
+          GitHub-hosted Ubuntu runner instead of following CI_RUNNER:
+          error, warning or off.
+        type: string
+        default: error
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ${{ inputs.runs-on || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Reads each job's runs-on as YAML (yq keeps line numbers and comments),
+      # so block lists and the labels of a group/labels map are caught, while
+      # group names and text in run: scripts are not. Both GitHub-hosted
+      # runners and the fallback image have yq v4 and jq. self-check.yml runs
+      # this exact script over tests/runner-guard on every change.
+      - name: Runners follow CI_RUNNER
+        if: inputs.runner-policy != 'off'
+        run: |
+          set -uo pipefail
+          case "${POLICY}" in
+            error|warning) ;;
+            *) echo "::error title=runner-policy::must be error, warning or off, not '${POLICY}'"; exit 1 ;;
+          esac
+          if ! yq --header-preprocess=false -n '1' >/dev/null 2>&1; then
+            echo "::error title=runner-policy::needs yq v4 (mikefarah) on the runner"; exit 1
+          fi
+          # shellcheck disable=SC2016 # yq and jq programs, not shell
+          query='.jobs // {} | .[] | select(has("runs-on")) | {"job": key,
+            "note": ((.["runs-on"] | key | line_comment) + " " + (.["runs-on"] | line_comment)),
+            "labels": [(.["runs-on"] | ((select(tag == "!!map") | .labels), select(tag != "!!map")))
+              | .. | select(tag == "!!str") | {"v": ., "l": line, "c": line_comment}]}'
+          # yq yields a bare {"labels": []} for a file with no runs-on job,
+          # and null for an absent comment, so the filter tolerates both.
+          # shellcheck disable=SC2016
+          filter='select(.job != null)
+            | select((.note // "") | test("hosted-only") | not)
+            | select([.labels[]?.v] | index("self-hosted") | not)
+            | .job as $job | .labels[]?
+            | select((.v | type) == "string" and (.v | test("^ubuntu-"))
+                     and ((.c // "") | test("hosted-only") | not))
+            | "\(.l)\t\($job)\t\(.v)"'
+          found=0
+          shopt -s nullglob
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            # Without --header-preprocess=false, yq drops a file's leading
+            # comments before parsing and every line number comes out short.
+            if ! jobs=$(yq --header-preprocess=false -o=json -I0 "${query}" "${file}"); then
+              echo "::warning file=${file},title=Unparsed workflow::yq could not read this file; actionlint reports why."
+              continue
+            fi
+            if ! hits=$(printf '%s\n' "${jobs}" | jq -r "${filter}"); then
+              echo "::error file=${file},title=runner-policy::could not check this file's runs-on values"
+              exit 1
+            fi
+            while IFS=$'\t' read -r line job label; do
+              [ -n "${line}" ] || continue
+              echo "::${POLICY} file=${file},line=${line},title=Hard-coded runner::Job '${job}' always runs on the GitHub-hosted '${label}', so it stops when the included Actions minutes run out. Use the CI_RUNNER variable (see ci/fallback-runner/README.md in TanksterAI/tankster-infra), or add a '# hosted-only' comment to its runs-on line if it must stay hosted."
+              found=$((found + 1))
+            done <<< "${hits}"
+          done
+          echo "${found} hard-coded runner(s)"
+          if [ "${found}" -gt 0 ] && [ "${POLICY}" = "error" ]; then
+            exit 1
+          fi
+        env:
+          POLICY: ${{ inputs.runner-policy }}
+
+      - name: Resolve latest actionlint
+        id: resolve
+        run: |
+          set -uo pipefail
+          latest=$(
+            curl -fsSL --retry 2 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              https://api.github.com/repos/rhysd/actionlint/releases/latest \
+              | grep -m1 -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
+              | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/'
+          ) || true
+          if [ -z "${latest:-}" ]; then
+            echo "::warning title=Version resolution failed::Could not reach the GitHub API; falling back to ${FALLBACK}."
+            latest="${FALLBACK}"
+          fi
+          echo "tag=${latest}" >> "$GITHUB_OUTPUT"
+          echo "version=${latest#v}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FALLBACK: ${{ inputs.fallback-version }}
+
+      - name: Cache actionlint
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/actionlint
+          key: ${{ runner.os }}-${{ runner.arch }}-actionlint-${{ steps.resolve.outputs.version }}
+
+      - name: Install actionlint
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Linux) os=linux ;;
+            macOS) os=darwin ;;
+            *) echo "::error title=actionlint::no .tar.gz release for runner OS '${RUNNER_OS}'"; exit 1 ;;
+          esac
+          case "${RUNNER_ARCH}" in
+            X64) arch=amd64 ;;
+            ARM64) arch=arm64 ;;
+            *) echo "::error title=actionlint::no release for runner architecture '${RUNNER_ARCH}'"; exit 1 ;;
+          esac
+          mkdir -p "${GITHUB_WORKSPACE}/.cache/actionlint"
+          url="https://github.com/rhysd/actionlint/releases/download/${TAG}/actionlint_${VERSION}_${os}_${arch}.tar.gz"
+          curl -fsSL --retry 3 "$url" -o /tmp/actionlint.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C "${GITHUB_WORKSPACE}/.cache/actionlint" actionlint
+          chmod +x "${GITHUB_WORKSPACE}/.cache/actionlint/actionlint"
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          bin="${GITHUB_WORKSPACE}/.cache/actionlint/actionlint"
+          "$bin" -version
+          if [ "${SHELLCHECK}" = "true" ]; then
+            "$bin" -color
+          else
+            "$bin" -color -shellcheck=
+          fi
+        env:
+          SHELLCHECK: ${{ inputs.shellcheck }}
