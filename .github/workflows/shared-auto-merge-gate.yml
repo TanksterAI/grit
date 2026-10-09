@@ -1,7 +1,7 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
 #   .github/workflows/auto-merge-gate.yml
 # That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
 # main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
@@ -18,9 +18,9 @@
 
 # Reusable auto-merge gate.
 #
-# Turns auto-merge on for every PR the moment it's opened, unless it carries
-# the opt-out label -- and turns it back off if that label is added later,
-# or on again if the label is removed.
+# Turns auto-merge on for every PR into the default branch the moment it's
+# opened, unless it carries the opt-out label -- and turns it back off if
+# that label is added later, or on again if the label is removed.
 #
 # The actual merge timing is entirely governed by the TanksterAI org ruleset
 # (required status checks + require all conversations resolved), not by
@@ -52,7 +52,12 @@ permissions:
 jobs:
   gate:
     name: Set auto-merge
-    if: github.event.pull_request.draft == false
+    # Only PRs into the default branch: that is the branch the org ruleset
+    # protects. A PR into any other branch may have no required checks or
+    # review, and turning auto-merge on there would merge it at once.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:

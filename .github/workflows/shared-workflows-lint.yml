@@ -1,7 +1,7 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
 #   .github/workflows/workflows-lint.yml
 # That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
 # main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
@@ -34,8 +34,9 @@
 # so with a `# hosted-only` comment on its runs-on line (or on the label).
 #
 # Nothing here pushes, so checkout does not keep the token, and the actions
-# are pinned to commit SHAs. The actionlint binary matches the runner's
-# architecture (x64 or arm64), and the cache key includes it.
+# are pinned to commit SHAs. The actionlint binary matches the runner's OS
+# (Linux or macOS) and architecture (x64 or arm64), and the cache key
+# includes both.
 name: workflows-lint
 
 on:
@@ -172,13 +173,18 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          case "${RUNNER_OS}" in
+            Linux) os=linux ;;
+            macOS) os=darwin ;;
+            *) echo "::error title=actionlint::no .tar.gz release for runner OS '${RUNNER_OS}'"; exit 1 ;;
+          esac
           case "${RUNNER_ARCH}" in
             X64) arch=amd64 ;;
             ARM64) arch=arm64 ;;
-            *) echo "::error title=actionlint::no Linux release for runner architecture '${RUNNER_ARCH}'"; exit 1 ;;
+            *) echo "::error title=actionlint::no release for runner architecture '${RUNNER_ARCH}'"; exit 1 ;;
           esac
           mkdir -p "${GITHUB_WORKSPACE}/.cache/actionlint"
-          url="https://github.com/rhysd/actionlint/releases/download/${TAG}/actionlint_${VERSION}_linux_${arch}.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/${TAG}/actionlint_${VERSION}_${os}_${arch}.tar.gz"
           curl -fsSL --retry 3 "$url" -o /tmp/actionlint.tar.gz
           tar -xzf /tmp/actionlint.tar.gz -C "${GITHUB_WORKSPACE}/.cache/actionlint" actionlint
           chmod +x "${GITHUB_WORKSPACE}/.cache/actionlint/actionlint"

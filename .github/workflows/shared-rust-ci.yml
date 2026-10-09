@@ -1,7 +1,7 @@
 # VENDORED COPY. Do not edit below this header; re-copy from the source.
 #
 # Copied verbatim from
-#   TanksterAI/.github@7e1b453061cf83bef7e80cb13f04cae9a4891f66
+#   TanksterAI/.github@6308bf9ab6e493b0633c9615d6b9d9651a793836
 #   .github/workflows/rust-ci.yml
 # That is the head of TanksterAI/.github#16 (fix/shared-workflow-hardening):
 # main at c2c57a4 plus the hardening CodeRabbit asked for on this PR (actions
@@ -61,8 +61,8 @@ on:
       forbid-panics:
         description: >-
           Fail if unwrap/expect/panic!/todo!/unimplemented! appear in .rs files
-          outside the items a #[cfg(test)] attribute covers. A text heuristic,
-          not a parser: see the step for its limits.
+          outside the items a #[cfg(test)] or #[test] attribute covers. A text
+          heuristic, not a parser: see the step for its limits.
         type: boolean
         default: true
       forbid-panics-path:
@@ -130,10 +130,14 @@ jobs:
       # Test code is exempt; production code is not.
       #
       # A heuristic over the text, not a Rust parser. Exempt: the item a
-      # #[cfg(test)] attribute covers, from the attribute to the closing brace
-      # of the block it opens (or the ";" ending e.g. `mod tests;`), and whole
-      # files that start with #![cfg(test)]. Code after a test module is
-      # scanned again. Ignored: text after "//" (so comments and doc comments).
+      # #[cfg(test)] or test attribute (#[test], #[tokio::test], ...) covers,
+      # from the attribute to the closing brace of the block it opens (or the
+      # ";" ending e.g. `mod tests;`), and whole files that start with
+      # #![cfg(test)]. Code after a test item is scanned again. A test module
+      # in its own file (`#[cfg(test)] mod tests;`) is not followed into that
+      # file, so start the file with #![cfg(test)]; otherwise its panics are
+      # reported, which fails the job rather than hiding anything. Ignored:
+      # text after "//" (so comments and doc comments).
       # Not understood: braces or "//" inside string literals, and /* */
       # comments, so an unusual file can be misjudged either way. Clippy's
       # unwrap_used / expect_used / panic lints are the parser-exact
@@ -155,7 +159,7 @@ jobs:
               sub(/\/\/.*/, "", code)
               if (FNR <= 50 && code ~ /^[[:space:]]*#!\[cfg\(test\)\]/) filetest = 1
               testline = filetest || intest
-              if (!intest && code ~ /#\[cfg\(test\)\]/) pending = 1
+              if (!intest && code ~ /#\[(cfg\(test\)|([A-Za-z_][A-Za-z0-9_]*::)*test[](])/) pending = 1
               if (pending || intest) {
                 testline = 1
                 n = split(code, ch, "")
